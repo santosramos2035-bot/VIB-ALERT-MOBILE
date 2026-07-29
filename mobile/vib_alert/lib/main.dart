@@ -12,6 +12,7 @@ import 'package:http/http.dart' as http;
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 const apiBase = 'https://send.vibplus.com/api/v1/index.php';
 const urgentChannelId = 'vib_urgent_opportunities';
@@ -35,16 +36,33 @@ Future<void>notificationActionBackground(NotificationResponse response) async {
   final data = Map<String, dynamic>.from(jsonDecode(payload));
   final action = response.actionId;
   if (action != 'accept' && action != 'refuse') return;
+
   final prefs = await SharedPreferences.getInstance();
   final token = prefs.getString('token');
   final oid = int.tryParse('${data['opportunity_id'] ?? 0}') ?? 0;
+
+  if (action == 'accept') {
+    data['vib_alert_action'] = 'accept';
+    await prefs.setString('pending_alert_payload', jsonEncode(data));
+    return;
+  }
+
   if (token == null || oid <= 0) return;
   try {
     final uri = Uri.parse('$apiBase?action=opportunity_decide');
-    await http.post(uri,
-      headers: {'Content-Type':'application/json','Accept':'application/json','Authorization':'Bearer $token'},
-      body: jsonEncode({'id': oid, 'decision': action == 'accept' ? 'accepted' : 'refused'}));
-    await localNotifications.cancel(int.tryParse('${data['notification_id'] ?? oid}') ?? oid);
+    await http.post(
+      uri,
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Authorization': 'Bearer $token',
+        'X-VIB-Token': token,
+      },
+      body: jsonEncode({'id': oid, 'decision': 'refused'}),
+    );
+    await localNotifications.cancel(
+      int.tryParse('${data['notification_id'] ?? oid}') ?? oid,
+    );
   } catch (_) {}
 }
 
@@ -57,12 +75,30 @@ class NotificationController {
       final payload = response.payload;
       if (payload == null || payload.isEmpty) return;
       final data = Map<String, dynamic>.from(jsonDecode(payload));
-      if (response.actionId == 'accept' || response.actionId == 'refuse') {
-        await _handleAlertDecision(data, response.actionId == 'accept' ? 'accepted' : 'refused');
+      if (response.actionId == 'refuse') {
+        final oid = int.tryParse('${data['opportunity_id'] ?? 0}') ?? 0;
+        if (oid > 0) {
+          try {
+            await api.call('opportunity_decide', method: 'POST', body: {
+              'id': oid,
+              'decision': 'refused',
+            });
+          } catch (_) {}
+        }
+        await nativeAlertChannel.invokeMethod('stopIncomingAlert');
+        await localNotifications.cancel(
+          int.tryParse('${data['notification_id'] ?? oid}') ?? oid,
+        );
         return;
       }
-      navigatorKey.currentState?.push(MaterialPageRoute(
-          builder: (_) => IncomingOpportunityPage(data: data)));
+
+      if (response.actionId == 'accept') {
+        data['vib_alert_action'] = 'accept';
+      }
+
+      navigatorKey.currentState?.push(
+        MaterialPageRoute(builder: (_) => IncomingOpportunityPage(data: data)),
+      );
     }, onDidReceiveBackgroundNotificationResponse: notificationActionBackground);
 
     final androidPlugin = localNotifications
@@ -147,32 +183,6 @@ class Api {
 
 final api = Api();
 
-
-Future<void> _openPwaUrl(String url) async {
-  await nativeAlertChannel.invokeMethod('openPwa', <String, dynamic>{'url': url});
-}
-
-Future<void> _handleAlertDecision(Map<String, dynamic> data, String decision) async {
-  final oid = int.tryParse('${data['opportunity_id'] ?? 0}') ?? 0;
-  if (oid <= 0) return;
-  await api.call('opportunity_decide', method: 'POST', body: <String, dynamic>{
-    'id': oid,
-    'decision': decision,
-  });
-  await nativeAlertChannel.invokeMethod('stopIncomingAlert');
-  await localNotifications.cancel(
-    int.tryParse('${data['notification_id'] ?? oid}') ?? oid,
-  );
-  if (decision == 'accepted') {
-    final handoff = await api.call('pwa_handoff', method: 'POST', body: <String, dynamic>{
-      'opportunity_id': oid,
-    });
-    final url = '${handoff['url'] ?? ''}';
-    if (url.isEmpty) throw Exception('Lien PWA introuvable.');
-    await _openPwaUrl(url);
-  }
-}
-
 class VibApp extends StatelessWidget {
   final RemoteMessage? initialMessage;
   const VibApp({super.key, this.initialMessage});
@@ -211,29 +221,40 @@ class _GateState extends State<Gate> {
     });
   }
   Future<void> _load() async {
-    final p = await SharedPreferences.getInstance();
-    api.token = p.getString('token');
-    if (mounted) setState(() => loading = false);
+    final prefs = await SharedPreferences.getInstance();
+    api.token = prefs.getString('token');
+
     Map<String, dynamic>? pendingData;
-    String pendingAction = 'open';
+
+    final pendingPayload = prefs.getString('pending_alert_payload');
+    if (pendingPayload != null && pendingPayload.isNotEmpty) {
+      try {
+        pendingData = Map<String, dynamic>.from(jsonDecode(pendingPayload));
+      } catch (_) {}
+      await prefs.remove('pending_alert_payload');
+    }
+
     try {
-      final native = await nativeAlertChannel.invokeMapMethod<String, dynamic>('getInitialAlert');
-      if (native != null && native.isNotEmpty) {
-        pendingData = Map<String, dynamic>.from(native);
-        pendingAction = '${native['vib_alert_action'] ?? 'open'}';
+      final nativeData = await nativeAlertChannel.invokeMapMethod<String, dynamic>(
+        'getInitialAlert',
+      );
+      if (nativeData != null && nativeData.isNotEmpty) {
+        pendingData = Map<String, dynamic>.from(nativeData);
       }
     } catch (_) {}
-    final initialData = pendingData ?? widget.initialMessage?.data;
-    if (initialData != null && mounted) {
-      WidgetsBinding.instance.addPostFrameCallback((_) async {
-        if (pendingAction == 'accept') {
-          try { await _handleAlertDecision(initialData!, 'accepted'); } catch (_) {}
-        } else if (pendingAction == 'refuse') {
-          try { await _handleAlertDecision(initialData!, 'refused'); } catch (_) {}
-        } else {
-          navigatorKey.currentState?.push(MaterialPageRoute(
-            builder: (_) => IncomingOpportunityPage(data: initialData!)));
-        }
+
+    if (widget.initialMessage != null) {
+      pendingData = Map<String, dynamic>.from(widget.initialMessage!.data);
+    }
+
+    if (mounted) setState(() => loading = false);
+
+    if (pendingData != null && mounted) {
+      final data = pendingData;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        navigatorKey.currentState?.push(
+          MaterialPageRoute(builder: (_) => IncomingOpportunityPage(data: data!)),
+        );
       });
     }
   }
@@ -481,13 +502,16 @@ class IncomingOpportunityPage extends StatefulWidget {
 }
 class _IncomingOpportunityPageState extends State<IncomingOpportunityPage> {
   bool busy = false;
+  bool autoActionHandled = false;
   int remaining = 120;
   Timer? timer;
+
   @override
   void initState() {
     super.initState();
     remaining = int.tryParse('${widget.data['expires_in'] ?? 120}') ?? 120;
     nativeAlertChannel.invokeMethod('startIncomingAlert').catchError((_) {});
+
     timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!mounted) return;
       if (remaining <= 1) {
@@ -498,20 +522,51 @@ class _IncomingOpportunityPageState extends State<IncomingOpportunityPage> {
         setState(() => remaining--);
       }
     });
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final action = '${widget.data['vib_alert_action'] ?? ''}'.toLowerCase();
+      if (!autoActionHandled && action == 'accept') {
+        autoActionHandled = true;
+        acceptAndOpenPwa();
+      }
+    });
   }
+
   @override
   void dispose() {
     timer?.cancel();
     nativeAlertChannel.invokeMethod('stopIncomingAlert').catchError((_) {});
     super.dispose();
   }
-  String get countdown => '${(remaining ~/ 60).toString().padLeft(2,'0')}:${(remaining % 60).toString().padLeft(2,'0')}';
-  Future<void> decide(String decision) async {
-    final oid = int.tryParse('${widget.data['opportunity_id'] ?? 0}') ?? 0;
-    if (oid <= 0) { if (mounted) Navigator.pop(context); return; }
+
+  String get countdown =>
+      '${(remaining ~/ 60).toString().padLeft(2, '0')}:${(remaining % 60).toString().padLeft(2, '0')}';
+
+  int get opportunityId =>
+      int.tryParse('${widget.data['opportunity_id'] ?? widget.data['id'] ?? 0}') ?? 0;
+
+  String get alertLabel {
+    final raw = '${widget.data['alert_label'] ?? widget.data['alert_type'] ?? ''}'
+        .trim()
+        .toLowerCase();
+    if (raw.contains('achat') || raw == 'buy') return 'ALERTE D’ACHAT';
+    if (raw.contains('vente') || raw == 'sell') return 'ALERTE DE VENTE';
+    if (widget.data['test'] == true || raw.contains('test')) return 'ALERTE DE TEST';
+    return 'OPPORTUNITÉ D’ARBITRAGE';
+  }
+
+  Future<void> refuse() async {
+    if (busy) return;
     setState(() => busy = true);
     try {
-      await _handleAlertDecision(widget.data, decision);
+      if (opportunityId > 0) {
+        await api.call(
+          'opportunity_decide',
+          method: 'POST',
+          body: {'id': opportunityId, 'decision': 'refused'},
+        );
+      }
+      await stopAlert();
       if (mounted) Navigator.pop(context);
     } catch (e) {
       if (mounted) {
@@ -519,36 +574,206 @@ class _IncomingOpportunityPageState extends State<IncomingOpportunityPage> {
           SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
         );
       }
-    } finally { if (mounted) setState(() => busy = false); }
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
   }
+
+  Future<void> acceptAndOpenPwa() async {
+    if (busy) return;
+    setState(() => busy = true);
+
+    try {
+      if (opportunityId <= 0) {
+        await stopAlert();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Alerte de test confirmée. Aucune opération réelle à ouvrir.'),
+            ),
+          );
+          Navigator.pop(context);
+        }
+        return;
+      }
+
+      await api.call(
+        'opportunity_decide',
+        method: 'POST',
+        body: {'id': opportunityId, 'decision': 'accepted'},
+      );
+
+      final handoff = await api.call(
+        'pwa_handoff',
+        method: 'POST',
+        body: {'opportunity_id': opportunityId},
+      );
+
+      final rawUrl = '${handoff['url'] ?? ''}'.trim();
+      if (rawUrl.isEmpty) {
+        throw Exception('Le serveur n’a pas retourné le lien sécurisé de la PWA.');
+      }
+
+      final uri = Uri.tryParse(rawUrl);
+      if (uri == null || !(uri.scheme == 'https' || uri.scheme == 'http')) {
+        throw Exception('Le lien sécurisé de la PWA est invalide.');
+      }
+
+      await stopAlert();
+
+      final opened = await launchUrl(
+        uri,
+        mode: LaunchMode.externalApplication,
+      );
+
+      if (!opened) {
+        throw Exception('Impossible d’ouvrir la PWA sur ce téléphone.');
+      }
+
+      if (mounted) Navigator.pop(context);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(e.toString().replaceFirst('Exception: ', '')),
+            duration: const Duration(seconds: 6),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  Future<void> stopAlert() async {
+    timer?.cancel();
+    await nativeAlertChannel.invokeMethod('stopIncomingAlert').catchError((_) {});
+    final notificationId = int.tryParse(
+          '${widget.data['notification_id'] ?? opportunityId}',
+        ) ??
+        opportunityId;
+    if (notificationId > 0) {
+      await localNotifications.cancel(notificationId);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final d = widget.data;
-    return Scaffold(
-      backgroundColor: const Color(0xFF071426),
-      body: SafeArea(child: Padding(padding: const EdgeInsets.all(24), child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        const Spacer(),
-        const Icon(Icons.notifications_active, size: 88, color: Colors.orange),
-        const SizedBox(height: 18),
-        Text('${d['alert_label'] ?? (d['alert_type'] == 'buy' ? 'ALERTE D’ACHAT' : d['alert_type'] == 'sell' ? 'ALERTE DE VENTE' : 'ALERTE D’ARBITRAGE')}', textAlign: TextAlign.center, style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w900)),
-        const SizedBox(height: 24),
-        Text('${d['route'] ?? d['title'] ?? 'Route d’arbitrage'}', textAlign: TextAlign.center, style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
-        const SizedBox(height: 12),
-        Text('Bénéfice net : ${d['profit_usdt'] ?? d['profit'] ?? '—'} USDT', textAlign: TextAlign.center, style: const TextStyle(color: Colors.greenAccent, fontSize: 20)),
-        Text('Score : ${d['score'] ?? '—'}/100', textAlign: TextAlign.center, style: const TextStyle(color: Colors.white70, fontSize: 18)),
-        const SizedBox(height: 20),
-        Container(padding: const EdgeInsets.symmetric(vertical: 12), decoration: BoxDecoration(color: Colors.orange.withValues(alpha: .12), borderRadius: BorderRadius.circular(14), border: Border.all(color: Colors.orangeAccent)), child: Column(children: [
-          const Text('TEMPS RESTANT', style: TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.bold)),
-          Text(countdown, style: const TextStyle(color: Colors.white, fontSize: 36, fontWeight: FontWeight.w900)),
-        ])),
-        const Spacer(),
-        Row(children: [
-          Expanded(child: OutlinedButton.icon(onPressed: busy ? null : () => decide('refused'), icon: const Icon(Icons.close), label: const Text('REFUSER'), style: OutlinedButton.styleFrom(foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 18)))),
-          const SizedBox(width: 12),
-          Expanded(child: FilledButton.icon(onPressed: busy ? null : () => decide('accepted'), icon: const Icon(Icons.check), label: const Text('ACCEPTER ET OUVRIR'), style: FilledButton.styleFrom(backgroundColor: Colors.green, padding: const EdgeInsets.symmetric(vertical: 18)))),
-        ]),
-        const SizedBox(height: 20),
-      ]))),
+    final isBuy = alertLabel.contains('ACHAT');
+    final isSell = alertLabel.contains('VENTE');
+    final accent = isBuy
+        ? Colors.blueAccent
+        : isSell
+            ? Colors.greenAccent
+            : Colors.orangeAccent;
+
+    return PopScope(
+      canPop: !busy,
+      child: Scaffold(
+        backgroundColor: const Color(0xFF071426),
+        body: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Spacer(),
+                Icon(Icons.notifications_active, size: 88, color: accent),
+                const SizedBox(height: 18),
+                Text(
+                  alertLabel,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: accent,
+                    fontSize: 24,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 24),
+                Text(
+                  '${d['route'] ?? d['title'] ?? 'Route d’arbitrage'}',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'Bénéfice net : ${d['profit_usdt'] ?? d['profit'] ?? '—'} USDT',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Colors.greenAccent,
+                    fontSize: 20,
+                  ),
+                ),
+                Text(
+                  'Score : ${d['score'] ?? '—'}/100',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.white70, fontSize: 18),
+                ),
+                const SizedBox(height: 20),
+                Container(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  decoration: BoxDecoration(
+                    color: accent.withValues(alpha: .12),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: accent),
+                  ),
+                  child: Column(
+                    children: [
+                      Text(
+                        'TEMPS RESTANT',
+                        style: TextStyle(
+                          color: accent,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      Text(
+                        countdown,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 36,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const Spacer(),
+                OutlinedButton.icon(
+                  onPressed: busy ? null : refuse,
+                  icon: const Icon(Icons.close),
+                  label: const Text('REFUSER'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 18),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                FilledButton.icon(
+                  onPressed: busy ? null : acceptAndOpenPwa,
+                  icon: busy
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.open_in_browser),
+                  label: const Text('ACCEPTER ET OUVRIR LA PWA'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: Colors.green,
+                    padding: const EdgeInsets.symmetric(vertical: 18),
+                  ),
+                ),
+                const SizedBox(height: 20),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
