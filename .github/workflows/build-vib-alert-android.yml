@@ -88,6 +88,38 @@ jobs:
           </resources>
           XML
 
+          # Corriger la connexion mobile et la transmission du jeton.
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("mobile/vib_alert/lib/main.dart")
+          text = path.read_text(encoding="utf-8")
+
+          text = text.replace(
+              "'Authorization':'Bearer $token'",
+              "'Authorization':'Bearer $token','X-VIB-Token':token"
+          )
+
+          text = text.replace(
+              "if (token != null) 'Authorization': 'Bearer $token'",
+              "if (token != null) 'Authorization': 'Bearer $token',\n"
+              "      if (token != null) 'X-VIB-Token': token"
+          )
+
+          text = text.replace(
+              "      await DeviceRegistrar.register();\n"
+              "      if (mounted) Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const Home()));",
+              "      try {\n"
+              "        await DeviceRegistrar.register();\n"
+              "      } catch (_) {\n"
+              "        // La connexion reste valide même si l'enregistrement Firebase échoue temporairement.\n"
+              "      }\n"
+              "      if (mounted) Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const Home()));"
+          )
+
+          path.write_text(text, encoding="utf-8")
+          PY
+
           # Éviter le conflit entre les fichiers Gradle Groovy et Kotlin.
           rm -f mobile/vib_alert/android/app/build.gradle.kts
           rm -f mobile/vib_alert/android/build.gradle.kts
@@ -164,7 +196,7 @@ jobs:
       - name: Publier l'APK
         uses: actions/upload-artifact@v4
         with:
-          name: VIB-Alert-Android-V5.4.6
+          name: VIB-Alert-Android-V5.4.7
           path: mobile/vib_alert/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
           retention-days: 30
