@@ -1,12 +1,17 @@
-VIB ALERT V5.5.1 — FICHIERS GITHUB
+VIB ALERT V5.6.0 — CORRECTION GITHUB
 
-Remplacez dans GitHub les 4 fichiers en conservant exactement leurs chemins :
+Cette version supprime le script Python fragile qui essayait de rechercher et modifier automatiquement un ancien bloc de connexion dans main.dart.
+
+Remplacez dans GitHub les fichiers suivants en conservant exactement leurs chemins :
 
 1. .github/workflows/build-vib-alert-android.yml
 2. mobile/vib_alert/lib/main.dart
 3. mobile/vib_alert/pubspec.yaml
 4. mobile/vib_alert/android/app/src/main/kotlin/com/vibplus/vib_alert/MainActivity.kt
 
-Ensuite : Commit changes > Actions > Compiler VIB Alert Android > Run workflow.
+Le workflow reconstruit toujours la structure Android complète, mais il ne modifie plus main.dart.
 
-L'artefact généré porte le nom VIB-Alert-Android-V5.5.1.
+Après le remplacement :
+Commit changes > Actions > Compiler VIB Alert Android > Run workflow.
+
+Artefact attendu : VIB-Alert-Android-V5.6.0
