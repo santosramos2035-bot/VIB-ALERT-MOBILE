@@ -6,6 +6,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.provider.Settings
 import android.view.WindowManager
 import io.flutter.embedding.android.FlutterActivity
@@ -19,11 +20,13 @@ class MainActivity : FlutterActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         captureAlertIntent(intent)
+
         window.addFlags(
             WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
                 WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
                 WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
         )
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
             setTurnScreenOn(true)
@@ -32,10 +35,13 @@ class MainActivity : FlutterActivity() {
 
     private fun captureAlertIntent(intent: Intent?) {
         if (intent?.getStringExtra("vib_alert_open") != "1") return
+
         val data = hashMapOf<String, String>()
+
         intent.extras?.keySet()?.forEach { key ->
             data[key] = intent.extras?.get(key)?.toString().orEmpty()
         }
+
         pendingAlertData = data
     }
 
@@ -47,11 +53,20 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channel).setMethodCallHandler { call, result ->
+
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            channel
+        ).setMethodCallHandler { call, result ->
+
             when (call.method) {
+
                 "openFullScreenPermission" -> {
                     if (Build.VERSION.SDK_INT >= 34) {
-                        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                        val manager =
+                            getSystemService(Context.NOTIFICATION_SERVICE)
+                                as NotificationManager
+
                         if (!manager.canUseFullScreenIntent()) {
                             startActivity(
                                 Intent(
@@ -61,33 +76,129 @@ class MainActivity : FlutterActivity() {
                             )
                         }
                     }
+
                     result.success(true)
                 }
+
+                "isIgnoringBatteryOptimizations" -> {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        val powerManager =
+                            getSystemService(Context.POWER_SERVICE)
+                                as PowerManager
+
+                        result.success(
+                            powerManager.isIgnoringBatteryOptimizations(
+                                packageName
+                            )
+                        )
+                    } else {
+                        result.success(true)
+                    }
+                }
+
+                "openBatteryOptimizationSettings" -> {
+                    try {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                            val powerManager =
+                                getSystemService(Context.POWER_SERVICE)
+                                    as PowerManager
+
+                            if (!powerManager.isIgnoringBatteryOptimizations(
+                                    packageName
+                                )
+                            ) {
+                                startActivity(
+                                    Intent(
+                                        Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                        Uri.parse("package:$packageName")
+                                    )
+                                )
+                            } else {
+                                startActivity(
+                                    Intent(
+                                        Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS
+                                    )
+                                )
+                            }
+                        } else {
+                            startActivity(
+                                Intent(Settings.ACTION_SETTINGS)
+                            )
+                        }
+
+                        result.success(true)
+                    } catch (e: Exception) {
+                        try {
+                            startActivity(
+                                Intent(
+                                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                    Uri.parse("package:$packageName")
+                                )
+                            )
+
+                            result.success(true)
+                        } catch (fallbackError: Exception) {
+                            result.error(
+                                "BATTERY_SETTINGS_ERROR",
+                                "Impossible d’ouvrir les réglages de batterie.",
+                                fallbackError.message
+                            )
+                        }
+                    }
+                }
+
                 "getInitialAlert" -> {
                     val data = pendingAlertData
                     pendingAlertData = null
                     result.success(data)
                 }
+
                 "startIncomingAlert" -> {
                     IncomingAlertService.start(
                         applicationContext,
-                        mapOf("title" to "VIB Alert", "body" to "Alerte urgente")
+                        mapOf(
+                            "title" to "VIB Alert",
+                            "body" to "Alerte urgente"
+                        )
                     )
+
                     result.success(true)
                 }
+
                 "stopIncomingAlert" -> {
-                    IncomingAlertService.stop(applicationContext)
+                    IncomingAlertService.stop(
+                        applicationContext
+                    )
+
                     result.success(true)
                 }
+
                 "openPwa" -> {
-                    val url = call.argument<String>("url").orEmpty()
-                    if (url.startsWith("https://send.vibplus.com/")) {
-                        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                    val url =
+                        call.argument<String>("url").orEmpty()
+
+                    if (
+                        url.startsWith(
+                            "https://send.vibplus.com/"
+                        )
+                    ) {
+                        startActivity(
+                            Intent(
+                                Intent.ACTION_VIEW,
+                                Uri.parse(url)
+                            )
+                        )
+
                         result.success(true)
                     } else {
-                        result.error("INVALID_URL", "Adresse PWA non autorisée.", null)
+                        result.error(
+                            "INVALID_URL",
+                            "Adresse PWA non autorisée.",
+                            null
+                        )
                     }
                 }
+
                 else -> result.notImplemented()
             }
         }
