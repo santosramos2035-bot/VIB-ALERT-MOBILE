@@ -1,0 +1,78 @@
+name: Compiler VIB Alert Android
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - 'mobile/vib_alert/**'
+      - '.github/workflows/build-vib-alert-android.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Récupérer le projet
+        uses: actions/checkout@v4
+
+      - name: Installer Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Installer Flutter stable
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Créer la structure Flutter complète
+        shell: bash
+        run: |
+          set -e
+          cp -a mobile/vib_alert /tmp/vib_alert_source
+          rm -rf mobile/vib_alert
+          flutter create \
+            --platforms=android,ios \
+            --org com.vibplus \
+            --project-name vib_alert \
+            mobile/vib_alert
+          cp /tmp/vib_alert_source/pubspec.yaml mobile/vib_alert/pubspec.yaml
+          rm -rf mobile/vib_alert/lib
+          cp -a /tmp/vib_alert_source/lib mobile/vib_alert/lib
+          cp /tmp/vib_alert_source/android/app/google-services.json mobile/vib_alert/android/app/google-services.json
+          cp /tmp/vib_alert_source/android/app/build.gradle mobile/vib_alert/android/app/build.gradle
+          cp /tmp/vib_alert_source/android/build.gradle mobile/vib_alert/android/build.gradle
+          cp /tmp/vib_alert_source/android/settings.gradle mobile/vib_alert/android/settings.gradle
+          cp /tmp/vib_alert_source/android/app/src/main/AndroidManifest.xml mobile/vib_alert/android/app/src/main/AndroidManifest.xml
+          rm -rf mobile/vib_alert/android/app/src/main/kotlin/com/vibplus/vib_alert
+          mkdir -p mobile/vib_alert/android/app/src/main/kotlin/com/vibplus/vib_alert
+          cp -a /tmp/vib_alert_source/android/app/src/main/kotlin/com/vibplus/vib_alert/. mobile/vib_alert/android/app/src/main/kotlin/com/vibplus/vib_alert/
+          if [ -d /tmp/vib_alert_source/android/app/src/main/res/values ]; then
+            cp -a /tmp/vib_alert_source/android/app/src/main/res/values/. mobile/vib_alert/android/app/src/main/res/values/
+          fi
+
+      - name: Installer les dépendances
+        working-directory: mobile/vib_alert
+        run: flutter pub get
+
+      - name: Vérifier la configuration Firebase
+        run: test -f mobile/vib_alert/android/app/google-services.json
+
+      - name: Compiler l'APK release
+        working-directory: mobile/vib_alert
+        run: flutter build apk --release
+
+      - name: Publier l'APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: VIB-Alert-Android-V5.4.2
+          path: mobile/vib_alert/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+          retention-days: 30
