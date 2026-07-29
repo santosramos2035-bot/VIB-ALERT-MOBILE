@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "230426879038",
+    "project_id": "vib-alert",
+    "storage_bucket": "vib-alert.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:230426879038:android:c9350e4feb9b1058e49d6f",
+        "android_client_info": {
+          "package_name": "com.vibplus.vib_alert"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCcKDdHLkBlTsCUPQNGyKqQUr_OpHQtyFE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
