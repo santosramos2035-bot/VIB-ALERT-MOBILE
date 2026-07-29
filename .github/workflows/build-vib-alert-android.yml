@@ -15,7 +15,7 @@ permissions:
 jobs:
   build-apk:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 35
 
     steps:
       - name: Récupérer le projet
@@ -33,23 +33,17 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Afficher la version de Flutter
-        run: flutter --version
-
-      - name: Sauvegarder les fichiers personnalisés
+      - name: Sauvegarder le projet personnalisé
         shell: bash
         run: |
           set -e
 
-          if [ ! -d "mobile/vib_alert" ]; then
-            echo "Le dossier mobile/vib_alert est introuvable."
-            exit 1
-          fi
+          test -d mobile/vib_alert
 
           rm -rf /tmp/vib_alert_source
           cp -a mobile/vib_alert /tmp/vib_alert_source
 
-      - name: Créer la structure Flutter complète
+      - name: Recréer la structure Flutter
         shell: bash
         run: |
           set -e
@@ -62,44 +56,23 @@ jobs:
             --project-name vib_alert \
             mobile/vib_alert
 
-      - name: Restaurer le code de l’application
+      - name: Restaurer les fichiers de l’application
         shell: bash
         run: |
           set -e
 
-          if [ -f /tmp/vib_alert_source/pubspec.yaml ]; then
-            cp /tmp/vib_alert_source/pubspec.yaml \
-              mobile/vib_alert/pubspec.yaml
-          fi
+          cp /tmp/vib_alert_source/pubspec.yaml \
+            mobile/vib_alert/pubspec.yaml
 
-          if [ -d /tmp/vib_alert_source/lib ]; then
-            rm -rf mobile/vib_alert/lib
-            cp -a /tmp/vib_alert_source/lib \
-              mobile/vib_alert/lib
-          fi
+          rm -rf mobile/vib_alert/lib
+          cp -a /tmp/vib_alert_source/lib \
+            mobile/vib_alert/lib
 
-          if [ -f /tmp/vib_alert_source/android/app/google-services.json ]; then
-            cp /tmp/vib_alert_source/android/app/google-services.json \
-              mobile/vib_alert/android/app/google-services.json
-          else
-            echo "Le fichier google-services.json est introuvable."
-            exit 1
-          fi
+          cp /tmp/vib_alert_source/android/app/google-services.json \
+            mobile/vib_alert/android/app/google-services.json
 
-          if [ -f /tmp/vib_alert_source/android/build.gradle ]; then
-            cp /tmp/vib_alert_source/android/build.gradle \
-              mobile/vib_alert/android/build.gradle
-          fi
-
-          if [ -f /tmp/vib_alert_source/android/settings.gradle ]; then
-            cp /tmp/vib_alert_source/android/settings.gradle \
-              mobile/vib_alert/android/settings.gradle
-          fi
-
-          if [ -f /tmp/vib_alert_source/android/app/src/main/AndroidManifest.xml ]; then
-            cp /tmp/vib_alert_source/android/app/src/main/AndroidManifest.xml \
-              mobile/vib_alert/android/app/src/main/AndroidManifest.xml
-          fi
+          cp /tmp/vib_alert_source/android/app/src/main/AndroidManifest.xml \
+            mobile/vib_alert/android/app/src/main/AndroidManifest.xml
 
           rm -rf \
             mobile/vib_alert/android/app/src/main/kotlin/com/vibplus/vib_alert
@@ -107,53 +80,97 @@ jobs:
           mkdir -p \
             mobile/vib_alert/android/app/src/main/kotlin/com/vibplus/vib_alert
 
-          if [ -d /tmp/vib_alert_source/android/app/src/main/kotlin/com/vibplus/vib_alert ]; then
-            cp -a \
-              /tmp/vib_alert_source/android/app/src/main/kotlin/com/vibplus/vib_alert/. \
-              mobile/vib_alert/android/app/src/main/kotlin/com/vibplus/vib_alert/
-          fi
+          cp -a \
+            /tmp/vib_alert_source/android/app/src/main/kotlin/com/vibplus/vib_alert/. \
+            mobile/vib_alert/android/app/src/main/kotlin/com/vibplus/vib_alert/
 
           if [ -d /tmp/vib_alert_source/android/app/src/main/res/values ]; then
-            mkdir -p mobile/vib_alert/android/app/src/main/res/values
-
             cp -a \
               /tmp/vib_alert_source/android/app/src/main/res/values/. \
               mobile/vib_alert/android/app/src/main/res/values/
           fi
 
-      - name: Corriger les thèmes Android
+      - name: Configurer les versions Android modernes
         shell: bash
         run: |
           set -e
 
-          mkdir -p mobile/vib_alert/android/app/src/main/res/values
+          cat > mobile/vib_alert/android/settings.gradle <<'GRADLE'
+          pluginManagement {
+              def flutterSdkPath = {
+                  def properties = new Properties()
+                  file("local.properties").withInputStream {
+                      properties.load(it)
+                  }
 
-          cat > mobile/vib_alert/android/app/src/main/res/values/styles.xml <<'XML'
-          <resources>
-              <style name="LaunchTheme" parent="@android:style/Theme.Black.NoTitleBar">
-                  <item name="android:windowFullscreen">true</item>
-              </style>
+                  def flutterSdkPath = properties.getProperty("flutter.sdk")
+                  assert flutterSdkPath != null :
+                      "flutter.sdk non défini dans local.properties"
 
-              <style name="NormalTheme" parent="@android:style/Theme.Black.NoTitleBar" />
-          </resources>
-          XML
+                  return flutterSdkPath
+              }()
 
-      - name: Supprimer les fichiers Gradle Kotlin en conflit
+              includeBuild("$flutterSdkPath/packages/flutter_tools/gradle")
+
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+
+          plugins {
+              id "dev.flutter.flutter-plugin-loader" version "1.0.0"
+              id "com.android.application" version "8.9.2" apply false
+              id "org.jetbrains.kotlin.android" version "2.1.10" apply false
+              id "com.google.gms.google-services" version "4.4.3" apply false
+          }
+
+          include ":app"
+          GRADLE
+
+          cat > mobile/vib_alert/android/build.gradle <<'GRADLE'
+          allprojects {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+
+          rootProject.buildDir = "../build"
+
+          subprojects {
+              project.buildDir = "${rootProject.buildDir}/${project.name}"
+          }
+
+          subprojects {
+              project.evaluationDependsOn(":app")
+          }
+
+          tasks.register("clean", Delete) {
+              delete rootProject.buildDir
+          }
+          GRADLE
+
+          cat > mobile/vib_alert/android/gradle/wrapper/gradle-wrapper.properties <<'PROPERTIES'
+          distributionBase=GRADLE_USER_HOME
+          distributionPath=wrapper/dists
+          zipStoreBase=GRADLE_USER_HOME
+          zipStorePath=wrapper/dists
+          distributionUrl=https\\://services.gradle.org/distributions/gradle-8.11.1-all.zip
+          PROPERTIES
+
+      - name: Configurer l’application Android
         shell: bash
         run: |
+          set -e
+
           rm -f mobile/vib_alert/android/app/build.gradle.kts
-          rm -f mobile/vib_alert/android/build.gradle.kts
-          rm -f mobile/vib_alert/android/settings.gradle.kts
-
-      - name: Configurer Android
-        shell: bash
-        run: |
-          set -e
 
           cat > mobile/vib_alert/android/app/build.gradle <<'GRADLE'
           plugins {
               id "com.android.application"
-              id "kotlin-android"
+              id "org.jetbrains.kotlin.android"
               id "dev.flutter.flutter-gradle-plugin"
               id "com.google.gms.google-services"
           }
@@ -161,6 +178,7 @@ jobs:
           android {
               namespace = "com.vibplus.vib_alert"
               compileSdk = flutter.compileSdkVersion
+              ndkVersion = flutter.ndkVersion
 
               compileOptions {
                   coreLibraryDesugaringEnabled true
@@ -206,12 +224,32 @@ jobs:
           }
           GRADLE
 
+      - name: Corriger le thème Android
+        shell: bash
+        run: |
+          set -e
+
+          mkdir -p mobile/vib_alert/android/app/src/main/res/values
+
+          cat > mobile/vib_alert/android/app/src/main/res/values/styles.xml <<'XML'
+          <resources>
+              <style
+                  name="LaunchTheme"
+                  parent="@android:style/Theme.Black.NoTitleBar">
+                  <item name="android:windowFullscreen">true</item>
+              </style>
+
+              <style
+                  name="NormalTheme"
+                  parent="@android:style/Theme.Black.NoTitleBar" />
+          </resources>
+          XML
+
       - name: Installer les dépendances
         working-directory: mobile/vib_alert
         run: flutter pub get
 
       - name: Vérifier Firebase
-        shell: bash
         run: |
           test -f \
             mobile/vib_alert/android/app/google-services.json
@@ -220,16 +258,10 @@ jobs:
         working-directory: mobile/vib_alert
         run: flutter build apk --release
 
-      - name: Vérifier que l’APK existe
-        shell: bash
-        run: |
-          test -f \
-            mobile/vib_alert/build/app/outputs/flutter-apk/app-release.apk
-
       - name: Publier l’APK
         uses: actions/upload-artifact@v4
         with:
-          name: VIB-Alert-Android-V5.6.1
+          name: VIB-Alert-Android-V5.6.2
           path: mobile/vib_alert/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
           retention-days: 30
