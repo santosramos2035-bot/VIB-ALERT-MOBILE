@@ -1,11 +1,9 @@
 name: vib_alert
-description: Application Android VIB Alert avec alertes urgentes et ouverture sécurisée de la PWA.
+description: Application Android VIB Alert avec alertes urgentes plein écran.
 publish_to: none
-version: 1.4.0+40
-
+version: 1.2.2+22
 environment:
   sdk: '>=3.3.0 <4.0.0'
-
 dependencies:
   flutter:
     sdk: flutter
@@ -17,11 +15,10 @@ dependencies:
   flutter_local_notifications: ^18.0.1
   device_info_plus: ^11.1.0
   package_info_plus: ^8.1.0
-
+  url_launcher: ^6.3.1
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^5.0.0
-
 flutter:
   uses-material-design: true
