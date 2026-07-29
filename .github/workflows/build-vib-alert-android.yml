@@ -36,27 +36,92 @@ jobs:
         shell: bash
         run: |
           set -e
+
           cp -a mobile/vib_alert /tmp/vib_alert_source
           rm -rf mobile/vib_alert
+
           flutter create \
             --platforms=android,ios \
             --org com.vibplus \
             --project-name vib_alert \
             mobile/vib_alert
+
           cp /tmp/vib_alert_source/pubspec.yaml mobile/vib_alert/pubspec.yaml
+
           rm -rf mobile/vib_alert/lib
           cp -a /tmp/vib_alert_source/lib mobile/vib_alert/lib
-          cp /tmp/vib_alert_source/android/app/google-services.json mobile/vib_alert/android/app/google-services.json
-          cp /tmp/vib_alert_source/android/app/build.gradle mobile/vib_alert/android/app/build.gradle
-          cp /tmp/vib_alert_source/android/build.gradle mobile/vib_alert/android/build.gradle
-          cp /tmp/vib_alert_source/android/settings.gradle mobile/vib_alert/android/settings.gradle
-          cp /tmp/vib_alert_source/android/app/src/main/AndroidManifest.xml mobile/vib_alert/android/app/src/main/AndroidManifest.xml
+
+          cp /tmp/vib_alert_source/android/app/google-services.json \
+            mobile/vib_alert/android/app/google-services.json
+
+          cp /tmp/vib_alert_source/android/build.gradle \
+            mobile/vib_alert/android/build.gradle
+
+          cp /tmp/vib_alert_source/android/settings.gradle \
+            mobile/vib_alert/android/settings.gradle
+
+          cp /tmp/vib_alert_source/android/app/src/main/AndroidManifest.xml \
+            mobile/vib_alert/android/app/src/main/AndroidManifest.xml
+
           rm -rf mobile/vib_alert/android/app/src/main/kotlin/com/vibplus/vib_alert
           mkdir -p mobile/vib_alert/android/app/src/main/kotlin/com/vibplus/vib_alert
-          cp -a /tmp/vib_alert_source/android/app/src/main/kotlin/com/vibplus/vib_alert/. mobile/vib_alert/android/app/src/main/kotlin/com/vibplus/vib_alert/
+
+          cp -a \
+            /tmp/vib_alert_source/android/app/src/main/kotlin/com/vibplus/vib_alert/. \
+            mobile/vib_alert/android/app/src/main/kotlin/com/vibplus/vib_alert/
+
           if [ -d /tmp/vib_alert_source/android/app/src/main/res/values ]; then
-            cp -a /tmp/vib_alert_source/android/app/src/main/res/values/. mobile/vib_alert/android/app/src/main/res/values/
+            cp -a \
+              /tmp/vib_alert_source/android/app/src/main/res/values/. \
+              mobile/vib_alert/android/app/src/main/res/values/
           fi
+
+          # Éviter le conflit entre les fichiers Gradle Groovy et Kotlin.
+          rm -f mobile/vib_alert/android/app/build.gradle.kts
+          rm -f mobile/vib_alert/android/build.gradle.kts
+          rm -f mobile/vib_alert/android/settings.gradle.kts
+
+          # Configuration Android corrigée :
+          # flutter_local_notifications exige le core library desugaring.
+          cat > mobile/vib_alert/android/app/build.gradle <<'GRADLE'
+          plugins {
+              id "com.android.application"
+              id "kotlin-android"
+              id "dev.flutter.flutter-gradle-plugin"
+              id "com.google.gms.google-services"
+          }
+
+          android {
+              namespace = "com.vibplus.vib_alert"
+              compileSdk = flutter.compileSdkVersion
+
+              compileOptions {
+                  coreLibraryDesugaringEnabled true
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+
+              kotlinOptions {
+                  jvmTarget = "17"
+              }
+
+              defaultConfig {
+                  applicationId = "com.vibplus.vib_alert"
+                  minSdk = 23
+                  targetSdk = flutter.targetSdkVersion
+                  versionCode = flutter.versionCode
+                  versionName = flutter.versionName
+              }
+          }
+
+          dependencies {
+              coreLibraryDesugaring "com.android.tools:desugar_jdk_libs:2.1.4"
+          }
+
+          flutter {
+              source = "../.."
+          }
+          GRADLE
 
       - name: Installer les dépendances
         working-directory: mobile/vib_alert
@@ -72,7 +137,7 @@ jobs:
       - name: Publier l'APK
         uses: actions/upload-artifact@v4
         with:
-          name: VIB-Alert-Android-V5.4.2
+          name: VIB-Alert-Android-V5.4.3
           path: mobile/vib_alert/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
           retention-days: 30
