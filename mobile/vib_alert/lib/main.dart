@@ -369,18 +369,61 @@ class Home extends StatefulWidget {
   State<Home> createState() => _HomeState();
 }
 
-class _HomeState extends State<Home> {
+class _HomeState extends State<Home> with WidgetsBindingObserver {
   List items = [];
   Map<String, dynamic> dashboard = {};
   bool busy = true;
   bool testing = false;
+  bool registrationBusy = false;
   String? error;
+
+  Timer? registrationTimer;
 
   @override
   void initState() {
     super.initState();
-    DeviceRegistrar.register().catchError((_) {});
+
+    WidgetsBinding.instance.addObserver(this);
+
+    _maintainDeviceRegistration();
+    registrationTimer = Timer.periodic(
+      const Duration(minutes: 5),
+      (_) => _maintainDeviceRegistration(),
+    );
+
     load();
+  }
+
+  Future<void> _maintainDeviceRegistration() async {
+    if (registrationBusy || api.token == null) return;
+
+    registrationBusy = true;
+
+    try {
+      await DeviceRegistrar.register();
+    } catch (_) {
+      // Une absence temporaire d'Internet ne doit pas bloquer l'application.
+      // Un nouvel essai sera effectué automatiquement.
+    } finally {
+      registrationBusy = false;
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+
+    if (state == AppLifecycleState.resumed) {
+      _maintainDeviceRegistration();
+      load();
+    }
+  }
+
+  @override
+  void dispose() {
+    registrationTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
   }
 
   Future<void> load() async {
