@@ -88,33 +88,115 @@ jobs:
           </resources>
           XML
 
-          # Corriger la connexion mobile et la transmission du jeton.
+          # Corriger proprement la connexion et les en-têtes du jeton.
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
           path = Path("mobile/vib_alert/lib/main.dart")
           text = path.read_text(encoding="utf-8")
 
-          text = text.replace(
-              "'Authorization':'Bearer $token'",
-              "'Authorization':'Bearer $token','X-VIB-Token':token"
+          api_class = """class Api {
+            String? token;
+
+            Future<Map<String, dynamic>> call(
+              String action, {
+              String method = 'GET',
+              Map<String, dynamic>? body,
+            }) async {
+              final uri = Uri.parse('$apiBase?action=$action');
+
+              final Map<String, String> headers = <String, String>{
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+              };
+
+              final currentToken = token;
+              if (currentToken != null && currentToken.isNotEmpty) {
+                headers['Authorization'] = 'Bearer $currentToken';
+                headers['X-VIB-Token'] = currentToken;
+              }
+
+              final http.Response response;
+              if (method == 'POST') {
+                response = await http.post(
+                  uri,
+                  headers: headers,
+                  body: jsonEncode(body ?? <String, dynamic>{}),
+                );
+              } else {
+                response = await http.get(uri, headers: headers);
+              }
+
+              dynamic decoded;
+              try {
+                decoded = jsonDecode(response.body);
+              } catch (_) {
+                throw Exception(
+                  'Réponse serveur invalide (${response.statusCode}).',
+                );
+              }
+
+              final Map<String, dynamic> data =
+                  decoded is Map<String, dynamic>
+                      ? decoded
+                      : <String, dynamic>{};
+
+              if (response.statusCode >= 400 || data['ok'] == false) {
+                throw Exception(
+                  '${data['error'] ?? data['message'] ?? 'Erreur serveur'}',
+                );
+              }
+
+              return data;
+            }
+          }"""
+
+          text, count = re.subn(
+              r'class Api \{.*?\n\}\n\nfinal api = Api\(\);',
+              api_class + '\n\nfinal api = Api();',
+              text,
+              count=1,
+              flags=re.S,
           )
+          if count != 1:
+              raise SystemExit("Impossible de remplacer la classe Api dans main.dart")
+
+          old_login = """      api.token = '${r['token']}';
+      final p = await SharedPreferences.getInstance();
+      await p.setString('token', api.token!);
+      await DeviceRegistrar.register();
+      if (mounted) Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const Home()));"""
+
+          new_login = """      final receivedToken = '${r['token'] ?? ''}'.trim();
+      if (receivedToken.isEmpty || receivedToken == 'null') {
+        throw Exception('Le serveur n’a pas retourné de jeton de connexion.');
+      }
+
+      api.token = receivedToken;
+      final p = await SharedPreferences.getInstance();
+      await p.setString('token', receivedToken);
+
+      try {
+        await DeviceRegistrar.register();
+      } catch (_) {
+        // Une erreur Firebase temporaire ne bloque pas la connexion.
+      }
+
+      if (mounted) {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => const Home()),
+        );
+      }"""
+
+          if old_login not in text:
+              raise SystemExit("Bloc de connexion attendu introuvable dans main.dart")
+          text = text.replace(old_login, new_login, 1)
 
           text = text.replace(
-              "if (token != null) 'Authorization': 'Bearer $token'",
-              "if (token != null) 'Authorization': 'Bearer $token',\n"
-              "      if (token != null) 'X-VIB-Token': token"
-          )
-
-          text = text.replace(
-              "      await DeviceRegistrar.register();\n"
-              "      if (mounted) Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const Home()));",
-              "      try {\n"
-              "        await DeviceRegistrar.register();\n"
-              "      } catch (_) {\n"
-              "        // La connexion reste valide même si l'enregistrement Firebase échoue temporairement.\n"
-              "      }\n"
-              "      if (mounted) Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const Home()));"
+              "'Authorization':'Bearer $token'},",
+              "'Authorization':'Bearer $token','X-VIB-Token':token},",
           )
 
           path.write_text(text, encoding="utf-8")
@@ -196,7 +278,7 @@ jobs:
       - name: Publier l'APK
         uses: actions/upload-artifact@v4
         with:
-          name: VIB-Alert-Android-V5.4.7
+          name: VIB-Alert-Android-V5.4.8
           path: mobile/vib_alert/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
           retention-days: 30
