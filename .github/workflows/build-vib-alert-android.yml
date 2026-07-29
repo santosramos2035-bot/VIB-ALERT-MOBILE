@@ -3,10 +3,11 @@ name: Compiler VIB Alert Android
 on:
   workflow_dispatch:
   push:
-    branches: [ main ]
+    branches:
+      - main
     paths:
-      - 'mobile/vib_alert/**'
-      - '.github/workflows/build-vib-alert-android.yml'
+      - "mobile/vib_alert/**"
+      - ".github/workflows/build-vib-alert-android.yml"
 
 permissions:
   contents: read
@@ -24,7 +25,7 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: "17"
 
       - name: Installer Flutter stable
         uses: subosito/flutter-action@v2
@@ -32,12 +33,27 @@ jobs:
           channel: stable
           cache: true
 
+      - name: Afficher la version de Flutter
+        run: flutter --version
+
+      - name: Sauvegarder les fichiers personnalisés
+        shell: bash
+        run: |
+          set -e
+
+          if [ ! -d "mobile/vib_alert" ]; then
+            echo "Le dossier mobile/vib_alert est introuvable."
+            exit 1
+          fi
+
+          rm -rf /tmp/vib_alert_source
+          cp -a mobile/vib_alert /tmp/vib_alert_source
+
       - name: Créer la structure Flutter complète
         shell: bash
         run: |
           set -e
 
-          cp -a mobile/vib_alert /tmp/vib_alert_source
           rm -rf mobile/vib_alert
 
           flutter create \
@@ -46,170 +62,94 @@ jobs:
             --project-name vib_alert \
             mobile/vib_alert
 
-          cp /tmp/vib_alert_source/pubspec.yaml mobile/vib_alert/pubspec.yaml
+      - name: Restaurer le code de l’application
+        shell: bash
+        run: |
+          set -e
 
-          rm -rf mobile/vib_alert/lib
-          cp -a /tmp/vib_alert_source/lib mobile/vib_alert/lib
+          if [ -f /tmp/vib_alert_source/pubspec.yaml ]; then
+            cp /tmp/vib_alert_source/pubspec.yaml \
+              mobile/vib_alert/pubspec.yaml
+          fi
 
-          cp /tmp/vib_alert_source/android/app/google-services.json \
-            mobile/vib_alert/android/app/google-services.json
+          if [ -d /tmp/vib_alert_source/lib ]; then
+            rm -rf mobile/vib_alert/lib
+            cp -a /tmp/vib_alert_source/lib \
+              mobile/vib_alert/lib
+          fi
 
-          cp /tmp/vib_alert_source/android/build.gradle \
-            mobile/vib_alert/android/build.gradle
+          if [ -f /tmp/vib_alert_source/android/app/google-services.json ]; then
+            cp /tmp/vib_alert_source/android/app/google-services.json \
+              mobile/vib_alert/android/app/google-services.json
+          else
+            echo "Le fichier google-services.json est introuvable."
+            exit 1
+          fi
 
-          cp /tmp/vib_alert_source/android/settings.gradle \
-            mobile/vib_alert/android/settings.gradle
+          if [ -f /tmp/vib_alert_source/android/build.gradle ]; then
+            cp /tmp/vib_alert_source/android/build.gradle \
+              mobile/vib_alert/android/build.gradle
+          fi
 
-          cp /tmp/vib_alert_source/android/app/src/main/AndroidManifest.xml \
-            mobile/vib_alert/android/app/src/main/AndroidManifest.xml
+          if [ -f /tmp/vib_alert_source/android/settings.gradle ]; then
+            cp /tmp/vib_alert_source/android/settings.gradle \
+              mobile/vib_alert/android/settings.gradle
+          fi
 
-          rm -rf mobile/vib_alert/android/app/src/main/kotlin/com/vibplus/vib_alert
-          mkdir -p mobile/vib_alert/android/app/src/main/kotlin/com/vibplus/vib_alert
+          if [ -f /tmp/vib_alert_source/android/app/src/main/AndroidManifest.xml ]; then
+            cp /tmp/vib_alert_source/android/app/src/main/AndroidManifest.xml \
+              mobile/vib_alert/android/app/src/main/AndroidManifest.xml
+          fi
 
-          cp -a \
-            /tmp/vib_alert_source/android/app/src/main/kotlin/com/vibplus/vib_alert/. \
-            mobile/vib_alert/android/app/src/main/kotlin/com/vibplus/vib_alert/
+          rm -rf \
+            mobile/vib_alert/android/app/src/main/kotlin/com/vibplus/vib_alert
+
+          mkdir -p \
+            mobile/vib_alert/android/app/src/main/kotlin/com/vibplus/vib_alert
+
+          if [ -d /tmp/vib_alert_source/android/app/src/main/kotlin/com/vibplus/vib_alert ]; then
+            cp -a \
+              /tmp/vib_alert_source/android/app/src/main/kotlin/com/vibplus/vib_alert/. \
+              mobile/vib_alert/android/app/src/main/kotlin/com/vibplus/vib_alert/
+          fi
 
           if [ -d /tmp/vib_alert_source/android/app/src/main/res/values ]; then
+            mkdir -p mobile/vib_alert/android/app/src/main/res/values
+
             cp -a \
               /tmp/vib_alert_source/android/app/src/main/res/values/. \
               mobile/vib_alert/android/app/src/main/res/values/
           fi
 
-          # Corriger les attributs de thème incompatibles.
-          # Le réveil et l'affichage sur écran verrouillé restent gérés
-          # par AndroidManifest.xml et le code Kotlin natif.
+      - name: Corriger les thèmes Android
+        shell: bash
+        run: |
+          set -e
+
+          mkdir -p mobile/vib_alert/android/app/src/main/res/values
+
           cat > mobile/vib_alert/android/app/src/main/res/values/styles.xml <<'XML'
           <resources>
               <style name="LaunchTheme" parent="@android:style/Theme.Black.NoTitleBar">
                   <item name="android:windowFullscreen">true</item>
               </style>
+
               <style name="NormalTheme" parent="@android:style/Theme.Black.NoTitleBar" />
           </resources>
           XML
 
-          # Corriger proprement la connexion et les en-têtes du jeton.
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-
-          path = Path("mobile/vib_alert/lib/main.dart")
-          text = path.read_text(encoding="utf-8")
-
-          api_class = """class Api {
-            String? token;
-
-            Future<Map<String, dynamic>> call(
-              String action, {
-              String method = 'GET',
-              Map<String, dynamic>? body,
-            }) async {
-              final uri = Uri.parse('$apiBase?action=$action');
-
-              final Map<String, String> headers = <String, String>{
-                'Content-Type': 'application/json',
-                'Accept': 'application/json',
-              };
-
-              final currentToken = token;
-              if (currentToken != null && currentToken.isNotEmpty) {
-                headers['Authorization'] = 'Bearer $currentToken';
-                headers['X-VIB-Token'] = currentToken;
-              }
-
-              final http.Response response;
-              if (method == 'POST') {
-                response = await http.post(
-                  uri,
-                  headers: headers,
-                  body: jsonEncode(body ?? <String, dynamic>{}),
-                );
-              } else {
-                response = await http.get(uri, headers: headers);
-              }
-
-              dynamic decoded;
-              try {
-                decoded = jsonDecode(response.body);
-              } catch (_) {
-                throw Exception(
-                  'Réponse serveur invalide (${response.statusCode}).',
-                );
-              }
-
-              final Map<String, dynamic> data =
-                  decoded is Map<String, dynamic>
-                      ? decoded
-                      : <String, dynamic>{};
-
-              if (response.statusCode >= 400 || data['ok'] == false) {
-                throw Exception(
-                  '${data['error'] ?? data['message'] ?? 'Erreur serveur'}',
-                );
-              }
-
-              return data;
-            }
-          }"""
-
-          text, count = re.subn(
-              r'class Api \{.*?\n\}\n\nfinal api = Api\(\);',
-              api_class + '\n\nfinal api = Api();',
-              text,
-              count=1,
-              flags=re.S,
-          )
-          if count != 1:
-              raise SystemExit("Impossible de remplacer la classe Api dans main.dart")
-
-          old_login = (
-              "      api.token = '${r['token']}';\n"
-              "      final p = await SharedPreferences.getInstance();\n"
-              "      await p.setString('token', api.token!);\n"
-              "      await DeviceRegistrar.register();\n"
-              "      if (mounted) Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const Home()));"
-          )
-
-          new_login = (
-              "      final receivedToken = '${r['token'] ?? ''}'.trim();\n"
-              "      if (receivedToken.isEmpty || receivedToken == 'null') {\n"
-              "        throw Exception('Le serveur n’a pas retourné de jeton de connexion.');\n"
-              "      }\n\n"
-              "      api.token = receivedToken;\n"
-              "      final p = await SharedPreferences.getInstance();\n"
-              "      await p.setString('token', receivedToken);\n\n"
-              "      try {\n"
-              "        await DeviceRegistrar.register();\n"
-              "      } catch (_) {\n"
-              "        // Une erreur Firebase temporaire ne bloque pas la connexion.\n"
-              "      }\n\n"
-              "      if (mounted) {\n"
-              "        Navigator.pushReplacement(\n"
-              "          context,\n"
-              "          MaterialPageRoute(builder: (_) => const Home()),\n"
-              "        );\n"
-              "      }"
-          )
-
-          if old_login not in text:
-              raise SystemExit("Bloc de connexion attendu introuvable dans main.dart")
-          text = text.replace(old_login, new_login, 1)
-
-          text = text.replace(
-              "'Authorization':'Bearer $token'},",
-              "'Authorization':'Bearer $token','X-VIB-Token':token},",
-          )
-
-          path.write_text(text, encoding="utf-8")
-          PY
-
-          # Éviter le conflit entre les fichiers Gradle Groovy et Kotlin.
+      - name: Supprimer les fichiers Gradle Kotlin en conflit
+        shell: bash
+        run: |
           rm -f mobile/vib_alert/android/app/build.gradle.kts
           rm -f mobile/vib_alert/android/build.gradle.kts
           rm -f mobile/vib_alert/android/settings.gradle.kts
 
-          # Configuration Android corrigée :
-          # flutter_local_notifications exige le core library desugaring.
+      - name: Configurer Android
+        shell: bash
+        run: |
+          set -e
+
           cat > mobile/vib_alert/android/app/build.gradle <<'GRADLE'
           plugins {
               id "com.android.application"
@@ -242,8 +182,6 @@ jobs:
 
               buildTypes {
                   release {
-                      // Signature de test installable sur Android.
-                      // Une clé de production dédiée sera ajoutée plus tard.
                       signingConfig signingConfigs.debug
                       minifyEnabled false
                       shrinkResources false
@@ -252,12 +190,15 @@ jobs:
           }
 
           dependencies {
-              coreLibraryDesugaring "com.android.tools:desugar_jdk_libs:2.1.4"
+              coreLibraryDesugaring \
+                  "com.android.tools:desugar_jdk_libs:2.1.4"
 
-              // Firebase Android BoM + Cloud Messaging natif.
-              // Nécessaire pour compiler VibFirebaseMessagingService.kt.
-              implementation platform("com.google.firebase:firebase-bom:34.16.0")
-              implementation "com.google.firebase:firebase-messaging"
+              implementation platform(
+                  "com.google.firebase:firebase-bom:34.16.0"
+              )
+
+              implementation \
+                  "com.google.firebase:firebase-messaging"
           }
 
           flutter {
@@ -269,17 +210,26 @@ jobs:
         working-directory: mobile/vib_alert
         run: flutter pub get
 
-      - name: Vérifier la configuration Firebase
-        run: test -f mobile/vib_alert/android/app/google-services.json
+      - name: Vérifier Firebase
+        shell: bash
+        run: |
+          test -f \
+            mobile/vib_alert/android/app/google-services.json
 
-      - name: Compiler l'APK release
+      - name: Compiler l’APK release
         working-directory: mobile/vib_alert
         run: flutter build apk --release
 
-      - name: Publier l'APK
+      - name: Vérifier que l’APK existe
+        shell: bash
+        run: |
+          test -f \
+            mobile/vib_alert/build/app/outputs/flutter-apk/app-release.apk
+
+      - name: Publier l’APK
         uses: actions/upload-artifact@v4
         with:
-          name: VIB-Alert-Android-V5.4.9
+          name: VIB-Alert-Android-V5.6.1
           path: mobile/vib_alert/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
           retention-days: 30
