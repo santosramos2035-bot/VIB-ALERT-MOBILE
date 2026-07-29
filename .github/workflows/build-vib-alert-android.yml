@@ -124,6 +124,16 @@ jobs:
                   versionCode = flutter.versionCode
                   versionName = flutter.versionName
               }
+
+              buildTypes {
+                  release {
+                      // Signature de test installable sur Android.
+                      // Une clé de production dédiée sera ajoutée plus tard.
+                      signingConfig signingConfigs.debug
+                      minifyEnabled false
+                      shrinkResources false
+                  }
+              }
           }
 
           dependencies {
@@ -154,7 +164,7 @@ jobs:
       - name: Publier l'APK
         uses: actions/upload-artifact@v4
         with:
-          name: VIB-Alert-Android-V5.4.5
+          name: VIB-Alert-Android-V5.4.6
           path: mobile/vib_alert/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
           retention-days: 30
