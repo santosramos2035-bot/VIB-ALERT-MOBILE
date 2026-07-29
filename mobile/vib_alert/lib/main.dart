@@ -58,17 +58,7 @@ class NotificationController {
       if (payload == null || payload.isEmpty) return;
       final data = Map<String, dynamic>.from(jsonDecode(payload));
       if (response.actionId == 'accept' || response.actionId == 'refuse') {
-        final oid = int.tryParse('${data['opportunity_id'] ?? 0}') ?? 0;
-        if (oid > 0) {
-          try {
-            await api.call('opportunity_decide', method: 'POST', body: {
-              'id': oid,
-              'decision': response.actionId == 'accept' ? 'accepted' : 'refused'
-            });
-          } catch (_) {}
-        }
-        await nativeAlertChannel.invokeMethod('stopIncomingAlert');
-        await localNotifications.cancel(int.tryParse('${data['notification_id'] ?? oid}') ?? oid);
+        await _handleAlertDecision(data, response.actionId == 'accept' ? 'accepted' : 'refused');
         return;
       }
       navigatorKey.currentState?.push(MaterialPageRoute(
@@ -142,7 +132,8 @@ class Api {
     final headers = {
       'Content-Type': 'application/json',
       'Accept': 'application/json',
-      if (token != null) 'Authorization': 'Bearer $token'
+      if (token != null) 'Authorization': 'Bearer $token',
+      if (token != null) 'X-VIB-Token': token!,
     };
     final r = method == 'POST'
         ? await http.post(uri, headers: headers, body: jsonEncode(body ?? {}))
@@ -155,6 +146,32 @@ class Api {
 }
 
 final api = Api();
+
+
+Future<void> _openPwaUrl(String url) async {
+  await nativeAlertChannel.invokeMethod('openPwa', <String, dynamic>{'url': url});
+}
+
+Future<void> _handleAlertDecision(Map<String, dynamic> data, String decision) async {
+  final oid = int.tryParse('${data['opportunity_id'] ?? 0}') ?? 0;
+  if (oid <= 0) return;
+  await api.call('opportunity_decide', method: 'POST', body: <String, dynamic>{
+    'id': oid,
+    'decision': decision,
+  });
+  await nativeAlertChannel.invokeMethod('stopIncomingAlert');
+  await localNotifications.cancel(
+    int.tryParse('${data['notification_id'] ?? oid}') ?? oid,
+  );
+  if (decision == 'accepted') {
+    final handoff = await api.call('pwa_handoff', method: 'POST', body: <String, dynamic>{
+      'opportunity_id': oid,
+    });
+    final url = '${handoff['url'] ?? ''}';
+    if (url.isEmpty) throw Exception('Lien PWA introuvable.');
+    await _openPwaUrl(url);
+  }
+}
 
 class VibApp extends StatelessWidget {
   final RemoteMessage? initialMessage;
@@ -197,10 +214,26 @@ class _GateState extends State<Gate> {
     final p = await SharedPreferences.getInstance();
     api.token = p.getString('token');
     if (mounted) setState(() => loading = false);
-    if (widget.initialMessage != null && mounted) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        navigatorKey.currentState?.push(MaterialPageRoute(
-          builder: (_) => IncomingOpportunityPage(data: widget.initialMessage!.data)));
+    Map<String, dynamic>? pendingData;
+    String pendingAction = 'open';
+    try {
+      final native = await nativeAlertChannel.invokeMapMethod<String, dynamic>('getInitialAlert');
+      if (native != null && native.isNotEmpty) {
+        pendingData = Map<String, dynamic>.from(native);
+        pendingAction = '${native['vib_alert_action'] ?? 'open'}';
+      }
+    } catch (_) {}
+    final initialData = pendingData ?? widget.initialMessage?.data;
+    if (initialData != null && mounted) {
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        if (pendingAction == 'accept') {
+          try { await _handleAlertDecision(initialData!, 'accepted'); } catch (_) {}
+        } else if (pendingAction == 'refuse') {
+          try { await _handleAlertDecision(initialData!, 'refused'); } catch (_) {}
+        } else {
+          navigatorKey.currentState?.push(MaterialPageRoute(
+            builder: (_) => IncomingOpportunityPage(data: initialData!)));
+        }
       });
     }
   }
@@ -280,7 +313,9 @@ class _LoginState extends State<Login> {
       api.token = '${r['token']}';
       final p = await SharedPreferences.getInstance();
       await p.setString('token', api.token!);
-      await DeviceRegistrar.register();
+      // L'enregistrement Firebase ne doit pas bloquer une connexion valide.
+      // La page d'accueil réessaiera automatiquement si nécessaire.
+      try { await DeviceRegistrar.register(); } catch (_) {}
       if (mounted) Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const Home()));
     } catch (e) {
       setState(() => error = e.toString().replaceFirst('Exception: ', ''));
@@ -473,13 +508,17 @@ class _IncomingOpportunityPageState extends State<IncomingOpportunityPage> {
   String get countdown => '${(remaining ~/ 60).toString().padLeft(2,'0')}:${(remaining % 60).toString().padLeft(2,'0')}';
   Future<void> decide(String decision) async {
     final oid = int.tryParse('${widget.data['opportunity_id'] ?? 0}') ?? 0;
-    if (oid <= 0) { Navigator.pop(context); return; }
+    if (oid <= 0) { if (mounted) Navigator.pop(context); return; }
     setState(() => busy = true);
     try {
-      await api.call('opportunity_decide', method: 'POST', body: {'id': oid, 'decision': decision});
-      await localNotifications.cancel(oid);
-      await nativeAlertChannel.invokeMethod('stopIncomingAlert');
+      await _handleAlertDecision(widget.data, decision);
       if (mounted) Navigator.pop(context);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
+        );
+      }
     } finally { if (mounted) setState(() => busy = false); }
   }
   @override
@@ -491,7 +530,7 @@ class _IncomingOpportunityPageState extends State<IncomingOpportunityPage> {
         const Spacer(),
         const Icon(Icons.notifications_active, size: 88, color: Colors.orange),
         const SizedBox(height: 18),
-        const Text('OPPORTUNITÉ ENTRANTE', textAlign: TextAlign.center, style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w900)),
+        Text('${d['alert_label'] ?? (d['alert_type'] == 'buy' ? 'ALERTE D’ACHAT' : d['alert_type'] == 'sell' ? 'ALERTE DE VENTE' : 'ALERTE D’ARBITRAGE')}', textAlign: TextAlign.center, style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w900)),
         const SizedBox(height: 24),
         Text('${d['route'] ?? d['title'] ?? 'Route d’arbitrage'}', textAlign: TextAlign.center, style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
         const SizedBox(height: 12),
@@ -506,7 +545,7 @@ class _IncomingOpportunityPageState extends State<IncomingOpportunityPage> {
         Row(children: [
           Expanded(child: OutlinedButton.icon(onPressed: busy ? null : () => decide('refused'), icon: const Icon(Icons.close), label: const Text('REFUSER'), style: OutlinedButton.styleFrom(foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 18)))),
           const SizedBox(width: 12),
-          Expanded(child: FilledButton.icon(onPressed: busy ? null : () => decide('accepted'), icon: const Icon(Icons.check), label: const Text('ACCEPTER'), style: FilledButton.styleFrom(backgroundColor: Colors.green, padding: const EdgeInsets.symmetric(vertical: 18)))),
+          Expanded(child: FilledButton.icon(onPressed: busy ? null : () => decide('accepted'), icon: const Icon(Icons.check), label: const Text('ACCEPTER ET OUVRIR'), style: FilledButton.styleFrom(backgroundColor: Colors.green, padding: const EdgeInsets.symmetric(vertical: 18)))),
         ]),
         const SizedBox(height: 20),
       ]))),

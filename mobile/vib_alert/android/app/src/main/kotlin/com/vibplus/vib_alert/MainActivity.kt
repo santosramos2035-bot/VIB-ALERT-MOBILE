@@ -79,6 +79,15 @@ class MainActivity : FlutterActivity() {
                     IncomingAlertService.stop(applicationContext)
                     result.success(true)
                 }
+                "openPwa" -> {
+                    val url = call.argument<String>("url").orEmpty()
+                    if (url.startsWith("https://send.vibplus.com/")) {
+                        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                        result.success(true)
+                    } else {
+                        result.error("INVALID_URL", "Adresse PWA non autorisée.", null)
+                    }
+                }
                 else -> result.notImplemented()
             }
         }
