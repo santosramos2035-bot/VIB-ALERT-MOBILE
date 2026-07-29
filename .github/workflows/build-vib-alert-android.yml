@@ -162,33 +162,34 @@ jobs:
           if count != 1:
               raise SystemExit("Impossible de remplacer la classe Api dans main.dart")
 
-          old_login = """      api.token = '${r['token']}';
-      final p = await SharedPreferences.getInstance();
-      await p.setString('token', api.token!);
-      await DeviceRegistrar.register();
-      if (mounted) Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const Home()));"""
+          old_login = (
+              "      api.token = '${r['token']}';\n"
+              "      final p = await SharedPreferences.getInstance();\n"
+              "      await p.setString('token', api.token!);\n"
+              "      await DeviceRegistrar.register();\n"
+              "      if (mounted) Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const Home()));"
+          )
 
-          new_login = """      final receivedToken = '${r['token'] ?? ''}'.trim();
-      if (receivedToken.isEmpty || receivedToken == 'null') {
-        throw Exception('Le serveur n’a pas retourné de jeton de connexion.');
-      }
-
-      api.token = receivedToken;
-      final p = await SharedPreferences.getInstance();
-      await p.setString('token', receivedToken);
-
-      try {
-        await DeviceRegistrar.register();
-      } catch (_) {
-        // Une erreur Firebase temporaire ne bloque pas la connexion.
-      }
-
-      if (mounted) {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => const Home()),
-        );
-      }"""
+          new_login = (
+              "      final receivedToken = '${r['token'] ?? ''}'.trim();\n"
+              "      if (receivedToken.isEmpty || receivedToken == 'null') {\n"
+              "        throw Exception('Le serveur n’a pas retourné de jeton de connexion.');\n"
+              "      }\n\n"
+              "      api.token = receivedToken;\n"
+              "      final p = await SharedPreferences.getInstance();\n"
+              "      await p.setString('token', receivedToken);\n\n"
+              "      try {\n"
+              "        await DeviceRegistrar.register();\n"
+              "      } catch (_) {\n"
+              "        // Une erreur Firebase temporaire ne bloque pas la connexion.\n"
+              "      }\n\n"
+              "      if (mounted) {\n"
+              "        Navigator.pushReplacement(\n"
+              "          context,\n"
+              "          MaterialPageRoute(builder: (_) => const Home()),\n"
+              "        );\n"
+              "      }"
+          )
 
           if old_login not in text:
               raise SystemExit("Bloc de connexion attendu introuvable dans main.dart")
@@ -278,7 +279,7 @@ jobs:
       - name: Publier l'APK
         uses: actions/upload-artifact@v4
         with:
-          name: VIB-Alert-Android-V5.4.8
+          name: VIB-Alert-Android-V5.4.9
           path: mobile/vib_alert/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
           retention-days: 30
