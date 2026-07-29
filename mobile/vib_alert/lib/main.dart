@@ -375,6 +375,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   bool busy = true;
   bool testing = false;
   bool registrationBusy = false;
+  bool batteryOptimizationDisabled = false;
+  bool batteryStatusLoading = true;
   String? error;
 
   Timer? registrationTimer;
@@ -391,6 +393,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
       (_) => _maintainDeviceRegistration(),
     );
 
+    _checkBatteryOptimization();
     load();
   }
 
@@ -415,6 +418,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
 
     if (state == AppLifecycleState.resumed) {
       _maintainDeviceRegistration();
+      _checkBatteryOptimization();
       load();
     }
   }
@@ -424,6 +428,62 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     registrationTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
+  }
+
+  Future<void> _checkBatteryOptimization() async {
+    if (!Platform.isAndroid) {
+      if (mounted) {
+        setState(() {
+          batteryOptimizationDisabled = true;
+          batteryStatusLoading = false;
+        });
+      }
+      return;
+    }
+
+    try {
+      final result = await nativeAlertChannel.invokeMethod<bool>(
+        'isIgnoringBatteryOptimizations',
+      );
+
+      if (mounted) {
+        setState(() {
+          batteryOptimizationDisabled = result == true;
+          batteryStatusLoading = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          batteryOptimizationDisabled = false;
+          batteryStatusLoading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _openBatterySettings() async {
+    try {
+      await nativeAlertChannel.invokeMethod(
+        'openBatteryOptimizationSettings',
+      );
+
+      // Android revient ensuite dans l'application. Le contrôle est aussi
+      // relancé par didChangeAppLifecycleState lorsque l'application reprend.
+      await Future<void>.delayed(const Duration(seconds: 1));
+      await _checkBatteryOptimization();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Impossible d’ouvrir les réglages de batterie : '
+              '${e.toString().replaceFirst('Exception: ', '')}',
+            ),
+          ),
+        );
+      }
+    }
   }
 
   Future<void> load() async {
@@ -508,6 +568,65 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                 SizedBox(width: cardWidth, child: statCard(Icons.notifications_active, 'Alertes aujourd’hui', '${dashboard['alerts_today'] ?? 0}', 'Téléphones en ligne : ${dashboard['online_devices'] ?? 0}')),
               ]);
             }),
+            const SizedBox(height: 12),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(
+                          batteryOptimizationDisabled
+                              ? Icons.verified_user
+                              : Icons.battery_alert,
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            batteryOptimizationDisabled
+                                ? 'Surveillance 24h/24 autorisée'
+                                : 'Autorisation 24h/24 nécessaire',
+                            style: const TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      batteryOptimizationDisabled
+                          ? 'Android est autorisé à laisser VIB Alert recevoir les alertes urgentes en arrière-plan.'
+                          : 'Désactive l’optimisation de batterie pour réduire le risque qu’Android retarde les alertes.',
+                    ),
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      width: double.infinity,
+                      child: batteryStatusLoading
+                          ? const Center(child: CircularProgressIndicator())
+                          : FilledButton.icon(
+                              onPressed: batteryOptimizationDisabled
+                                  ? _checkBatteryOptimization
+                                  : _openBatterySettings,
+                              icon: Icon(
+                                batteryOptimizationDisabled
+                                    ? Icons.refresh
+                                    : Icons.settings,
+                              ),
+                              label: Text(
+                                batteryOptimizationDisabled
+                                    ? 'VÉRIFIER À NOUVEAU'
+                                    : 'AUTORISER LE FONCTIONNEMENT 24H/24',
+                              ),
+                            ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
             const SizedBox(height: 12),
             Card(child: Padding(padding: const EdgeInsets.all(14), child: Row(children: [
               const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('Test de l’alerte urgente', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)), SizedBox(height: 4), Text('Le téléphone doit sonner, vibrer et afficher l’écran type appel.')])),
