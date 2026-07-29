@@ -76,6 +76,18 @@ jobs:
               mobile/vib_alert/android/app/src/main/res/values/
           fi
 
+          # Corriger les attributs de thème incompatibles.
+          # Le réveil et l'affichage sur écran verrouillé restent gérés
+          # par AndroidManifest.xml et le code Kotlin natif.
+          cat > mobile/vib_alert/android/app/src/main/res/values/styles.xml <<'XML'
+          <resources>
+              <style name="LaunchTheme" parent="@android:style/Theme.Black.NoTitleBar">
+                  <item name="android:windowFullscreen">true</item>
+              </style>
+              <style name="NormalTheme" parent="@android:style/Theme.Black.NoTitleBar" />
+          </resources>
+          XML
+
           # Éviter le conflit entre les fichiers Gradle Groovy et Kotlin.
           rm -f mobile/vib_alert/android/app/build.gradle.kts
           rm -f mobile/vib_alert/android/build.gradle.kts
@@ -137,7 +149,7 @@ jobs:
       - name: Publier l'APK
         uses: actions/upload-artifact@v4
         with:
-          name: VIB-Alert-Android-V5.4.3
+          name: VIB-Alert-Android-V5.4.4
           path: mobile/vib_alert/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
           retention-days: 30
